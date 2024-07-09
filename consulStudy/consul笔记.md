@@ -74,7 +74,7 @@ Consul 集群由多个 Server 和 Client 组成。不论是 Server 还是 Client
 ### Server 模式
 
 ```bash
-consul agent -bootstrap-expect 2 -server -data-dir /data/consul0 -node=cn1 -bind=192.168.1.202 -ui -config-dir /etc/consul.d -rejoin -join 198.168.188.128 -client=0.0.0.0
+consul agent -server -bootstrap-expect 2 -data-dir /tmp/consul -node=cn1 -bind=192.168.188.128 -ui -config-dir /etc/consul.d -rejoin -join 198.168.188.128 -client=0.0.0.0
 ```
 
 - `-server`：表示当前节点为 Server 模式
