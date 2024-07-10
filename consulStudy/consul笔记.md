@@ -85,7 +85,6 @@ consul agent -server -bootstrap-expect 2 -data-dir /tmp/consul -node=cn1 -bind=1
 - `-ui`：启动 Web 界面
 - `-config-dir`：配置文件目录
 - `-rejoin`：自动重连
-- `-enable-script-checks`：允许执行脚本
 - `-join`：加入哪个 Server 集群
 - `-client`：监听的客户端地址
 
@@ -101,3 +100,68 @@ consul agent -data-dir /data/consul0 -node=cn1 -bind=192.168.1.202 -config-dir /
 - `-config-dir`：配置文件目录
 - `-rejoin`：自动重连
 - `-join`：加入哪个 Server 集群
+
+`consul members` 命令可以查看当前集群的成员信息。
+
+`consul leave` 命令可以主动离开集群。
+
+创建配置文件目录：
+
+```bash
+mkdir /etc/consul.d
+```
+
+编辑服务配置文件 `/etc/consul.d/app.json`：
+
+```json
+{
+  "service": {
+    "name": "app",
+    "tags": ["rails"],
+    "address": "127.0.0.1",
+    "port": 8080,
+    "checks": [
+      {
+        "name": "HTTP on port 8080",
+        "http": "http://localhost:8080/health",
+        "interval": "10s"
+      }
+    ]
+  }
+}
+```
+
+简单的健康检查示例：
+
+```go
+package main
+
+import (
+  "fmt"
+  "net/http"
+)
+
+func main() {
+  http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintln(w, "OK")
+  })
+  http.ListenAndServe(":8080", nil)
+}
+```
+
+使用 `dig` 命令查看服务：
+
+```bash
+dig @127.0.0.1 -p 8600 app.service.consul
+```
+
+## Consul 架构图
+
+![consul架构图](https://ucc.alicdn.com/pic/developer-ecology/9b396dc233f0408cbb6f37b248fc2995.png?x-oss-process=image/resize,w_1400/format,webp)
+
+## 参考资料
+
+- [Consul 官方文档](https://www.consul.io/docs)
+- [Raft 协议简介](https://raft.github.io/)
+
+---
