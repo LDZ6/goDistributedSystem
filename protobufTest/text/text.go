@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"goDistributedSystem/protobufStudy/prototext"
+	"goDistributedSystem/protobufTest/prototext"
+
 	"google.golang.org/protobuf/proto"
 )
 
