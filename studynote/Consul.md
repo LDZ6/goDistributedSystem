@@ -1,234 +1,161 @@
-# 				Consul
+# Consul集群详解及应用
 
-## Consul的介绍
+## 简介
+Consul 是 HashiCorp 公司推出的开源工具，用于实现分布式系统的服务发现与配置。Consul 是分布式的、高可用的、可横向扩展的。完成 Consul 的安装后，必须运行 agent 代理，agent 可以运行为 server 模式或 client 模式。
 
-### Consul是什么
+- **服务模式 (server 模式)**: 主要参与维护集群状态，响应 RPC 查询，与其他数据中心交换 WAN gossip ，以及向上级或远程数据中心转发查询，并且会将数据持久化。推荐使用 3 到 5 台机器。
+- **客户模式 (client 模式)**: 客户模式下 Consul Agent 是一个非常轻量级的进程，它消耗最小的资源开销和少量的网络带宽，提供注册服务，运行健康检查，并将查询转发给服务器。客户端是相对无状态的，不负责数据的持久化，必须要有一个服务模式的 Consul。
 
-​	Consul是HashiCorp公司推出的开源工具，用于实现分布式系统的服务发现与配置。 Consul是分布式的、高可用的、可横向扩展的。它具备以下特性 :
+一个数据中心至少必须拥有一台 server，建议在一个集群中有 3 或者 5 个 server。单一 server 在出现失败时，会不可避免地出现数据丢失。
 
-​	服务发现：consul通过DNS或者HTTP接口使服务注册和服务发现变的很容易，一些外部服务，例如saas提供的也可以一样注册。
+## 架构
+Consul 的架构分为上下两个部分，通过 WAN GOSSIP 进行报文交互。单个 datacenter 中，节点被划分为 server 和 client，他们之间通过 GRPC 进行通信。此外，Client 和 Server 之间通过 LAN Gossip 进行通信。
 
-​	健康检查：健康检测使consul可以快速的告警在集群中的操作。和服务发现的集成，可以防止服务转发到故障的服务上面。
+Consul 的 client 是一个非常轻量级的进程，用于注册服务、运行健康检查和转发对 server 的查询。每个数据中心至少必须拥有一个 server。Agent 必须在集群中的每个主机上运行。
 
-​	键/值存储：一个用来存储动态配置的系统。提供简单的HTTP接口，可以在任何地方操作。
+## Server 功能
+- 参与共识仲裁（Raft）
+- 存储机器状态（日志存储）
+- 处理查询
+- 维护周边（LAN/WAN) 节点之间的关系
 
-​	多数据中心：无需复杂的配置，即可支持任意数量的区域。
+## Client 功能
+- 负责通过该节点注册到 Consul 微服务的健康检查
+- 将客户端的注册请求和查询转换为 server 的 RPC 请求
+- 维护周边各节点（LAN/WAN) 的关系
 
-### Consul的安装
+## 服务端口
+- **8300**: 只存在于 server 模式，选取 Leader 节点（Raft 协议），为 Leader 节点和 Client 节点提供 RPC 调用。
+- **8301**: LAN 网中集群数据同步的通信端口（Gossip 协议），也是加入集群的通信端口。
+- **8302**: 只存在于 server 模式，WAN 网中集群数据同步的通信端口（Gossip 协议），主要支持数据中心与数据中心之间通过 WAN 交互。
+- **8500**: 提供 Http 服务（或 web 界面）。
+- **8600**: 提供 DNS 服务端口。
 
-​	Consul用Golang实现，因此具有天然可移植性 (支持 Linux、windows和macOS)。安装包仅包含一个可执行文件。 Consul安装非常简单，只需要下载对应系统的软件包并解压后就可使用。 
+## 实现原理
+Consul 主要基于两个协议来实现其核心功能：
+- **Gossip 协议**: 在集群内消息传递。
+- **Raft 协议**: 保障日志的一致性。
 
-#### 下载安装
+## 案例讲解
+以下是通过 Consul 实现微服务注册与发现的示例。
 
+### 集群配置
+准备四个虚拟机，三个作为服务端，一个作为客户端。安装好 Consul 等相关软件。假设 IP 地址如下：
+- 服务端：192.168.1.129, 192.168.1.130, 192.168.1.131
+- 客户端：192.168.1.132
 
+### 步骤
+1. **启动服务端**
+    ```sh
+    consul agent -server -bootstrap-expect 3 -node=server_01 -bind=192.168.1.129 -ui -data-dir=/root/usr/local/consul/data -client 0.0.0.0
+    consul agent -server -bootstrap-expect 3 -node=server_02 -bind=192.168.1.130 -ui -data-dir=/root/usr/local/consul/data -client 0.0.0.0
+    consul agent -server -bootstrap-expect 3 -node=server_03 -bind=192.168.1.131 -ui -data-dir=/root/usr/local/consul/data -client 0.0.0.0
+    ```
 
-```shell
-# 这里以 Linux系统为例：
-$ wget https://releases.hashicorp.com/consul/1.4.2/consul_1.4.2_linux_amd64.zip
+2. **启动客户端**
+    ```sh
+    consul agent -data-dir=/root/usr/local/consul/data -node=client-01 -bind=192.168.1.132 -ui -client 0.0.0.0
+    ```
 
-$ unzip consul_1.4.2_linux_amd64.zip
-$ mv consul /usr/local/bin/
+3. **关联集群**
+    在 server-02、server-03、client-01 节点上运行以下命令建立集群关系：
+    ```sh
+    consul join 192.168.1.129
+    ```
+
+4. **查看 Consul 成员和集群状态**
+    ```sh
+    consul members
+    ```
+
+### 服务注册与发现
+通过修改示例代码，将服务注册到 Consul，并通过 Consul 客户端发现并调用服务。
+
+- **服务端代码修改**:
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "net"
+        "google.golang.org/grpc"
+        "github.com/hashicorp/consul/api"
+        "serverHello/proto/helloService"
+    )
+
+    type Hello struct{}
+
+    func (this Hello) SayHello(c context.Context, req *helloService.HelloReq) (*helloService.HelloRes, error) {
+        fmt.Println(req)
+        return &helloService.HelloRes{
+            Message: "你好" + req.Name,
+        }, nil
+    }
+
+    func main() {
+        consulConfig := api.DefaultConfig()
+        consulConfig.Address = "192.168.1.132:8500"
+        consulClient, _ := api.NewClient(consulConfig)
+        agentService := api.AgentServiceRegistration{
+            ID:      "1",
+            Tags:    []string{"test"},
+            Name:    "HelloService",
+            Port:    8082,
+            Address: "192.168.1.111",
+            Check: &api.AgentServiceCheck{
+                TCP:      "192.168.1.111:8082",
+                Timeout:  "5s",
+                Interval: "30s",
+            },
+        }
+        consulClient.Agent().ServiceRegister(&agentService)
+        grpcServer := grpc.NewServer()
+        helloService.RegisterHelloServer(grpcServer, new(Hello))
+        listener, err := net.Listen("tcp", "192.168.1.111:8082")
+        if err != nil {
+            fmt.Println(err)
+        }
+        defer listener.Close()
+        grpcServer.Serve(listener)
+    }
+    ```
+
+- **客户端代码修改**:
+    ```go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "google.golang.org/grpc"
+        "github.com/hashicorp/consul/api"
+        "serverHello/proto/helloService"
+    )
+
+    func main() {
+        consulConfig := api.DefaultConfig()
+        consulClient, _ := api.NewClient(consulConfig)
+        services, _ := consulClient.Agent().Services()
+        helloServiceData := services["HelloService"]
+        helloServiceAddress := helloServiceData.Address + ":" + fmt.Sprintf("%d", helloServiceData.Port)
+        grpcConn, _ := grpc.Dial(helloServiceAddress, grpc.WithInsecure())
+        defer grpcConn.Close()
+        grpcClient := helloService.NewHelloClient(grpcConn)
+        res, err := grpcClient.SayHello(context.Background(), &helloService.HelloReq{
+            Name: "小名",
+        })
+        if err != nil {
+            fmt.Println(err)
+        }
+        fmt.Println(res)
+    }
+    ```
+
+运行客户端代码，控制台将打印出 "你好小名"。
+
+### 集群退出
+可以使用 `Ctrl-C` 优雅地关闭 Agent，或运行以下命令优雅退出集群：
+```sh
+consul leave
 ```
-
-其它系统版本可在这里下载： https://www.consul.io/downloads.html
-
-#### 验证安装
-
-安装 Consul后，通过执行 consul命令，你可以看到命令列表的输出
-
-```shell
-$ consul
-```
-
-就证明成功了
-
-### Consul 的角色
-
-**client**: 客户端, 无状态, 将 HTTP 和 DNS 接口请求转发给局域网内的服务端集群.
-
-**server**: 服务端, 保存配置信息, 高可用集群, 在局域网内与本地客户端通讯, 通过广域网与其他数据中心通讯. 每个数据中心的 server 数量推荐为 3 个或是 5 个.
-
-### 运行 Consul代理 
-
-​	Consul是典型的 C/S架构，可以运行服务模式或客户模式。每一个数据中心必须有至少一个服务节点， 3到5个服务节点最好。非常不建议只运行一个服务节点，因为在节点失效的情况下数据有极大的丢失风险。 
-
-#### 运行Agent
-
-​	完成Consul的安装后,必须运行agent. agent可以运行为server或client模式.每个数据中心至少必须拥有一台server . 建议在一个集群中有3或者5个server.部署单一的server,在出现失败时会不可避免的造成数据丢失.
-
-​	其他的agent运行为client模式.一个client是一个非常轻量级的进程.用于注册服务,运行健康检查和转发对server的查询.agent必须在集群中的每个主机上运行.
-
-#### 启动 Consul Server
-
-```shell
-#node1:
-$ consul agent -server -bootstrap-expect 2 -data-dir /tmp/consul -node=n1 -bind=192.168.110.155 -ui  -config-dir /etc/consul.d -rejoin -join 192.168.110.155 -client 0.0.0.0
-#运行cosnul agent以server模式
--server ： 定义agent运行在server模式
--bootstrap-expect ：在一个datacenter中期望提供的server节点数目，当该值提供的时候，consul一直等到达到指定sever数目的时候才会引导整个集群，该标记不能和bootstrap共用
--data-dir：提供一个目录用来存放agent的状态，所有的agent允许都需要该目录，该目录必须是稳定的，系统重启后都继续存在
--node：节点在集群中的名称，在一个集群中必须是唯一的，默认是该节点的主机名
--bind：该地址用来在集群内部的通讯，集群内的所有节点到地址都必须是可达的，默认是0.0.0.0
--ui： 启动web界面
--config-dir：：配置文件目录，里面所有以.json结尾的文件都会被加载
--rejoin：使consul忽略先前的离开，在再次启动后仍旧尝试加入集群中。
--client：consul服务侦听地址，这个地址提供HTTP、DNS、RPC等服务，默认是127.0.0.1所以不对外提供服务，如果你要对外提供服务改成0.0.0.0
-
-```
-
-
-
-```shell
-#node2:
-$ consul agent -server -bootstrap-expect 2 -data-dir /tmp/consul -node=n2 -bind=192.168.110.169 -ui  -rejoin -join 192.168.110.155
-
--server ： 定义agent运行在server模式
--bootstrap-expect ：在一个datacenter中期望提供的server节点数目，当该值提供的时候，consul一直等到达到指定sever数目的时候才会引导整个集群，该标记不能和bootstrap共用
--bind：该地址用来在集群内部的通讯，集群内的所有节点到地址都必须是可达的，默认是0.0.0.0
--node：节点在集群中的名称，在一个集群中必须是唯一的，默认是该节点的主机名
--ui： 启动web界面
--rejoin：使consul忽略先前的离开，在再次启动后仍旧尝试加入集群中。
--config-dir：：配置文件目录，里面所有以.json结尾的文件都会被加载
--client：consul服务侦听地址，这个地址提供HTTP、DNS、RPC等服务，默认是127.0.0.1所以不对外提供服务，如果你要对外提供服务改成0.0.0.0
--join 192.168.110.121 ： 启动时加入这个集群
-```
-
-
-
-
-
-
-
-#### 启动 Consul Client
-
-```shell
-#node3：
-$ consul agent  -data-dir /tmp/consul -node=n3 -bind=192.168.110.157 -config-dir /etc/consul.d -rejoin -join 192.168.110.155
-
-运行cosnul agent以client模式，-join 加入到已有的集群中去。
-```
-
-
-
-
-
-
-
-#### 查看集群成员
-
-新开一个终端窗口运行consul members, 你可以看到Consul集群的成员.
-
-```shell
-$ consul members
-#节点  网络地址               状态     类型     版本   协议       数据中心  分管部分 
-Node  Address               Status  Type    Build  Protocol  DC   Segment
-
-n1    192.168.110.7:8301    alive   server  1.1.0  2         dc1  <all>
-n2    192.168.110.121:8301  alive   server  1.1.0  2         dc1  <all>
-n3    192.168.110.122:8301  alive   client  1.1.0  2         dc1  <default>
-```
-
-
-
-
-
-
-
-#### 停止Agent
-
-​	你可以使用Ctrl-C 优雅的关闭Agent. 中断Agent之后你可以看到他离开了集群并关闭.
-
-​	在退出中,Consul提醒其他集群成员,这个节点离开了.如果你强行杀掉进程.集群的其他成员应该能检测到这个节点失效了.当一个成员离开,他的服务和检测也会从目录中移除.当一个成员失效了,他的健康状况被简单的标记为危险,但是不会从目录中移除.Consul会自动尝试对失效的节点进行重连.允许他从某些网络条件下恢复过来.离开的节点则不会再继续联系.
-
-​	此外,如果一个agent作为一个服务器,一个优雅的离开是很重要的,可以避免引起潜在的可用性故障影响达成一致性协议.
-consul优雅的退出
-
-```shell
-$ consul leave
-```
-
-
-
-#### 注册服务
-
-​	搭建好conusl集群后，用户或者程序就能到consul中去查询或者注册服务。可以通过提供服务定义文件或者调用HTTP API来注册一个服务.
-
-​	首先,为Consul配置创建一个目录.Consul会载入配置文件夹里的所有配置文件.在Unix系统中通常类似 /etc/consul.d (.d 后缀意思是这个路径包含了一组配置文件).
-
-```shell
-$ mkdir /etc/consul.d
-```
-
-​	然后,我们将编写服务定义配置文件.假设我们有一个名叫web的服务运行在 10000端口.另外,我们将给他设置一个标签.这样我们可以使用他作为额外的查询方式:
-
-```shell
-{
-  "service": {                                      #服务
-	 "name": "web",									#名称
-	 "tags": ["master"],                            #标记
-	 "address": "127.0.0.1",						#ip
-	 "port": 10000,									#端口
-	 "checks": [
-	   {
-	     "http": "http://localhost:10000/health",
-	     "interval": "10s"							#检查时间
-	   }
-	 ]
-  }
-}
-```
-
-
-
-#### 测试程序
-
-```go
-package main
-import (
-	"fmt"
-	"net/http"
-)
-func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("hello Web3! This is n3或者n2")
-	fmt.Fprintf(w, "Hello Web3! This is n3或者n2")
-}
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("health check! n3或者n2")
-}
-func main() {
-	http.HandleFunc("/", handler)
-	http.HandleFunc("/health", healthHandler)
-	http.ListenAndServe(":10000", nil)
-}
-```
-
-### Consul架构 
-
-![1538379657844](assets/1538379657844.png)
-
-​	我们只看数据中心1，可以看出consul的集群是由N个SERVER，加上M个CLIENT组成的。而不管是SERVER还是CLIENT，都是consul的一个节点，所有的服务都可以注册到这些节点上，正是通过这些节点实现服务注册信息的共享。除了这两个，还有一些小细节，一一简单介绍。
-​	**CLIENT**
-​	CLIENT表示consul的client模式，就是客户端模式。是consul节点的一种模式，这种模式下，所有注册到当前节点的服务会被转发到SERVER【通过HTTP和DNS接口请求server】，本身是**不持久化**这些信息。
-​	**SERVER**
-​	SERVER表示consul的server模式，表明这个consul是个server，这种模式下，功能和CLIENT都一样，唯一不同的是，它会把所有的信息持久化的本地，这样遇到故障，信息是可以被保留的
-​	**SERVER-LEADER**
-​	中间那个SERVER下面有LEADER的字眼，表明这个SERVER是它们的老大，它和其它SERVER不一样的一点是，它需要负责同步注册的信息给其它的SERVER，同时也要负责各个节点的健康监测。
-
-
-
-#### Consul的client mode把请求转向server，那么client的作用是什么？
-
-​	consul可以用来实现分布式系统的服务发现与配置。client把服务请求传递给server，server负责提供服务以及和其他数据中心交互。题主的问题是，既然server端提供了所有服务，那为何还需要多此一举地用client端来接收一次服务请求。我想，采用这种架构有以下几种理由：
-
-​	首先server端的网络连接资源有限。对于一个分布式系统，一般情况下访问量是很大的。如果用户能不通过client直接地访问数据中心，那么数据中心必然要为每个用户提供一个单独的连接资源(线程，端口号等等)，那么server端的负担会非常大。所以很有必要用大量的client端来分散用户的连接请求，在client端先统一整合用户的服务请求，然后一次性地通过一个单一的链接发送大量的请求给server端，能够大量减少server端的网络负担。
-
-​	其次，在client端可以对用户的请求进行一些处理来提高服务的效率，比如将相同的请求合并成同一个查询，再比如将之前的查询通过cookie的形式缓存下来。但是这些功能都需要消耗不少的计算和存储资源。如果在server端提供这些功能，必然加重server端的负担，使得server端更加不稳定。而通过client端来进行这些服务就没有这些问题了，因为client端不提供实际服务，有很充足的计算资源来进行这些处理这些工作。
-
-​	最后还有一点，consul规定只要接入一个client就能将自己注册到一个服务网络当中。这种架构使得系统的可扩展性非常的强，网络的拓扑变化可以特别的灵活。这也是依赖于client—server结构的。如果系统中只有几个数据中心存在，那网络的扩张也无从谈起了。
-
-
-
-
-
-Consul资料：http://www.liangxiansen.cn/2017/04/06/consul 
-https://blog.csdn.net/yuanyuanispeak/article/details/54880743
