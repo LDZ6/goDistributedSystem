@@ -1,0 +1,24 @@
+syntax = "proto3";
+ 
+package goodsinfo;
+ 
+option go_package = "./proto;goodsinfo";
+ 
+//商品相关方法
+service Goodsinfo {
+    //AddGoods: 定义增加商品的微服务, 这里的写法和gRPC中的写法一致
+    rpc AddGoods(AddRequest) returns (AddResponse) {}
+}
+ 
+//和gRPC中的写法一致
+message AddRequest {
+    string title = 1;
+    string price = 2;
+    string content = 3;
+}
+ 
+//和gRPC中的写法一致
+message AddResponse {
+    string message = 1;
+    bool success = 2;
+}

@@ -159,3 +159,270 @@ Consul 主要基于两个协议来实现其核心功能：
 ```sh
 consul leave
 ```
+## GRPC 微服务集群概念
+Consul 集群通过多台服务器的协作，当一台服务器宕机时，集群会从另一台服务器中获取服务，从而保证客户端访问 Consul 集群的负载均衡性。然而，如果终端对应的微服务宕机，Consul 集群服务器将无法访问该微服务。这时，我们需要引入 GRPC 微服务集群来解决这个问题。
+
+### 什么是 GRPC 微服务集群
+
+GRPC 微服务集群是指将一个 GRPC 微服务部署到多台不同服务器上。当其中一个微服务宕机时，Consul 会访问另一台服务器上的对应微服务，从而实现微服务的负载均衡。这样可以提高系统的可靠性和可用性。
+
+GRPC 微服务集群主要实现的是微服务的负载均衡，通过将同样的微服务部署在不同的服务器上，结合 Consul 可以非常简单地搭建 GRPC 微服务集群：
+
+- 同一个微服务的不同应用使用同样的注册名
+- 同一个微服务的不同应用注册服务时使用不同的 ID
+
+### 代码展示
+
+#### 注销相关服务
+
+首先，检查 Consul UI 上是否存在 `goods` 服务。如果存在，则先注销之前的 `goods` 服务。
+
+#### 部署微服务集群
+
+以 `goods` 微服务为例，将 `server/goods` 部署到两台服务器上，并修改 `main.go` 中的代码，以区分不同服务器上的同一个微服务。
+
+##### 部署到服务器 192.168.1.111
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "github.com/hashicorp/consul/api"
+    "goods/proto/goodsService"
+    "net"
+    "google.golang.org/grpc"
+    "strconv"
+)
+
+type Goods struct{}
+
+func (g Goods) AddGoods(c context.Context, req *goodsService.AddGoodsReq) (*goodsService.AddGoodsRes, error) {
+    fmt.Println(req)
+    return &goodsService.AddGoodsRes{
+        Message: "第一个goods微服务-增加数据成功",
+        Success: true,
+    }, nil
+}
+
+func (g Goods) GetGoods(c context.Context, req *goodsService.GetGoodsReq) (*goodsService.GetGoodsRes, error) {
+    var tempList []*goodsService.GoodsModel
+    for i := 0; i < 10; i++ {
+        tempList = append(tempList, &goodsService.GoodsModel{
+            Title:   "商品" + strconv.Itoa(i),
+            Price:   float64(i),
+            Content: "测试商品内容" + strconv.Itoa(i),
+        })
+    }
+    return &goodsService.GetGoodsRes{
+        GoodsList: tempList,
+    }, nil
+}
+
+func main() {
+    consulConfig := api.DefaultConfig()
+    consulConfig.Address = "192.168.1.132:8500"
+    consulClient, _ := api.NewClient(consulConfig)
+    agentService := api.AgentServiceRegistration{
+        ID:      "1",
+        Tags:    []string{"goods"},
+        Name:    "GoodsService",
+        Port:    8080,
+        Address: "192.168.1.111",
+        Check: &api.AgentServiceCheck{
+            TCP:      "192.168.1.111:8080",
+            Timeout:  "5s",
+            Interval: "30s",
+        },
+    }
+    consulClient.Agent().ServiceRegister(&agentService)
+
+    grpcServer := grpc.NewServer()
+    goodsService.RegisterGoodsServer(grpcServer, new(Goods))
+    listener, err := net.Listen("tcp", "192.168.1.111:8080")
+    if err != nil {
+        fmt.Println(err)
+    }
+    defer listener.Close()
+    grpcServer.Serve(listener)
+}
+```
+
+##### 部署到服务器 192.168.1.112
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "github.com/hashicorp/consul/api"
+    "goods/proto/goodsService"
+    "net"
+    "google.golang.org/grpc"
+    "strconv"
+)
+
+type Goods struct{}
+
+func (g Goods) AddGoods(c context.Context, req *goodsService.AddGoodsReq) (*goodsService.AddGoodsRes, error) {
+    fmt.Println(req)
+    return &goodsService.AddGoodsRes{
+        Message: "第二个goods微服务-增加数据成功",
+        Success: true,
+    }, nil
+}
+
+func (g Goods) GetGoods(c context.Context, req *goodsService.GetGoodsReq) (*goodsService.GetGoodsRes, error) {
+    var tempList []*goodsService.GoodsModel
+    for i := 0; i < 10; i++ {
+        tempList = append(tempList, &goodsService.GoodsModel{
+            Title:   "商品" + strconv.Itoa(i),
+            Price:   float64(i),
+            Content: "测试商品内容" + strconv.Itoa(i),
+        })
+    }
+    return &goodsService.GetGoodsRes{
+        GoodsList: tempList,
+    }, nil
+}
+
+func main() {
+    consulConfig := api.DefaultConfig()
+    consulConfig.Address = "192.168.1.132:8500"
+    consulClient, _ := api.NewClient(consulConfig)
+    agentService := api.AgentServiceRegistration{
+        ID:      "2",
+        Tags:    []string{"goods"},
+        Name:    "GoodsService",
+        Port:    8080,
+        Address: "192.168.1.112",
+        Check: &api.AgentServiceCheck{
+            TCP:      "192.168.1.112:8080",
+            Timeout:  "5s",
+            Interval: "30s",
+        },
+    }
+    consulClient.Agent().ServiceRegister(&agentService)
+
+    grpcServer := grpc.NewServer()
+    goodsService.RegisterGoodsServer(grpcServer, new(Goods))
+    listener, err := net.Listen("tcp", "192.168.1.112:8080")
+    if err != nil {
+        fmt.Println(err)
+    }
+    defer listener.Close()
+    grpcServer.Serve(listener)
+}
+```
+
+注意，两台服务器上的代码不同之处在于：
+
+- ID 不同
+- Port 为对应服务器上的端口号
+- Address 为对应服务器的 IP
+- Name 和 Tag 一定要一致
+
+启动服务：
+
+```bash
+go run main.go
+```
+
+这样就注册 `goods` 微服务到 Consul 服务发现集群中了。
+
+### 客户端进行调度
+
+客户端请求微服务时，需要实现负载均衡。这里有两种方式：
+
+#### 方式一：随机取地址
+
+```go
+package main
+
+import (
+    "client/proto/goodsService"
+    "context"
+    "fmt"
+    "github.com/hashicorp/consul/api"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+    "strconv"
+)
+
+func main() {
+    consulConfig := api.DefaultConfig()
+    consulConfig.Address = "192.168.1.132:8500"
+    consulClient, _ := api.NewClient(consulConfig)
+    serviceGoodsEntry, _, _ := consulClient.Health().Service("GoodsService", "test", false, nil)
+    addressGoods := serviceGoodsEntry[0].Service.Address + ":" + strconv.Itoa(serviceGoodsEntry[0].Service.Port)
+
+    grpcGoodsClient, err := grpc.Dial(addressGoods, grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        fmt.Println(err)
+    }
+    clientGoods := goodsService.NewGoodsClient(grpcGoodsClient)
+    res1, _ := clientGoods.AddGoods(context.Background(), &goodsService.AddGoodsReq{
+        Goods: &goodsService.GoodsModel{
+            Title:   "测试商品",
+            Price:   20,
+            Content: "测试商品的内容",
+        },
+    })
+    fmt.Println(res1.Message)
+    fmt.Println(res1.Success)
+
+    res2, _ := clientGoods.GetGoods(context.Background(), &goodsService.GetGoodsReq{})
+    fmt.Printf("%#v", res2.GoodsList)
+    for i := 0; i < len(res2.GoodsList); i++ {
+        fmt.Printf("%#v\r\n", res2.GoodsList[i])
+    }
+}
+```
+
+#### 方式二：使用 grpc-consul-resolver 实现域名解析
+
+```go
+package main
+
+import (
+    "client/proto/goodsService"
+    "context"
+    "fmt"
+    _ "github.com/mbobakov/grpc-consul-resolver"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+)
+
+func main() {
+    grpcGoodsClient, err := grpc.Dial(
+        "consul://192.168.234.132:8500/GoodsService",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+        grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy": "round_robin"}`),
+    )
+    if err != nil {
+        fmt.Println(err)
+    }
+    clientGoods := goodsService.NewGoodsClient(grpcGoodsClient)
+    res1, _ := clientGoods.AddGoods(context.Background(), &goodsService.AddGoodsReq{
+        Goods: &goodsService.GoodsModel{
+            Title:   "测试商品",
+            Price:   20,
+            Content: "测试商品的内容",
+        },
+    })
+    fmt.Println(res1.Message)
+    fmt.Println(res1.Success)
+
+    res2, _ := clientGoods.GetGoods(context.Background(), &goods
+
+Service.GetGoodsReq{})
+    fmt.Printf("%#v", res2.GoodsList)
+    for i := 0; i < len(res2.GoodsList); i++ {
+        fmt.Printf("%#v\r\n", res2.GoodsList[i])
+    }
+}
+```
+
+注意，使用 `grpc-consul-resolver` 可以自动处理负载均衡，不需要手动配置地址。
