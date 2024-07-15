@@ -43,7 +43,7 @@ func Md5(str string) string {
 	data := []byte(str)
 	return fmt.Sprintf("%x\n", md5.Sum(data))
 }
-func Hello(in string) (out string) {
-	out = in + "world"
-	return
+
+func Println(str1 string, str2 string) string {
+	return str1 + " " + str2
 }
